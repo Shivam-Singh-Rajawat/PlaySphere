@@ -1,11 +1,14 @@
 """PlaySphere: accessible, single-origin FastAPI + SQLite sports discovery app."""
 
+import hashlib
 import json
 import os
 import secrets
+import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 from typing import Annotated, Literal
 
 import jwt
@@ -20,6 +23,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sess
 
 ROOT = Path(__file__).resolve().parent
 MAX_VIDEO_BYTES = 25 * 1024 * 1024
+MAX_CLOUD_VIDEO_BYTES = 100 * 1024 * 1024
 ROLES = {'player', 'coach', 'scout', 'club'}
 SCOUT_ROLES = {'coach', 'scout', 'club'}
 
@@ -52,7 +56,7 @@ class Video(Base):
     kind: Mapped[str] = mapped_column(String(20))
     visibility: Mapped[str] = mapped_column(String(10), default='public')
     url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    storage_name: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    storage_name: Mapped[str | None] = mapped_column(String(240), unique=True, nullable=True)
     media_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -183,6 +187,52 @@ class VideoLinkInput(BaseModel):
     visibility: Literal['public', 'private'] = 'public'
 
 
+class CloudUploadRequest(BaseModel):
+    visibility: Literal['public', 'private'] = 'public'
+
+
+class CloudAsset(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    public_id: str = Field(min_length=8, max_length=180)
+    version: int = Field(ge=1)
+    signature: str = Field(min_length=40, max_length=64)
+    resource_type: Literal['video']
+    type: Literal['upload', 'authenticated']
+    format: Literal['mp4', 'webm', 'mov']
+    bytes: int = Field(gt=0, le=MAX_CLOUD_VIDEO_BYTES)
+
+
+class CompleteUploadRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    ticket: str
+    title: str = Field(min_length=2, max_length=160)
+    kind: Literal['highlight', 'match', 'training']
+    asset: CloudAsset
+
+
+def cloud_signature(params: dict[str, str | int], secret: str) -> str:
+    # Cloudinary's SHA-1 signature format: alphabetical k=v pairs + API secret.
+    message = '&'.join(f'{key}={params[key]}' for key in sorted(params)) + secret
+    return hashlib.sha1(message.encode('utf-8')).hexdigest()
+
+
+def cloud_config():
+    config = {name: os.environ.get(f'CLOUDINARY_{name.upper()}', '').strip()
+              for name in ('cloud_name', 'api_key', 'api_secret')}
+    if not all(config.values()):
+        raise HTTPException(503, 'Cloud video storage is not configured. Use a video link or configure Cloudinary.')
+    return config
+
+
+def configure_cloudinary(config):
+    try:
+        import cloudinary
+    except ImportError as exc:
+        raise HTTPException(503, 'Cloudinary SDK is missing from the deployment.') from exc
+    cloudinary.config(cloud_name=config['cloud_name'], api_key=config['api_key'],
+                      api_secret=config['api_secret'], secure=True)
+
+
 class TournamentInput(BaseModel):
     title: str = Field(min_length=3, max_length=180)
     sport: str = Field(min_length=2, max_length=60)
@@ -217,7 +267,10 @@ def public_video(video: Video):
     return {'id': video.id, 'player_id': video.player_id, 'title': video.title,
             'kind': video.kind, 'visibility': video.visibility,
             'url': video.url if video.url else f'/api/videos/{video.id}/file',
-            'uploaded': bool(video.storage_name), 'created_at': video.created_at.isoformat()}
+            'uploaded': bool(video.storage_name),
+            'storage': ('cloud' if video.storage_name and video.storage_name.startswith('cloudinary:')
+                        else 'local' if video.storage_name else 'link'),
+            'created_at': video.created_at.isoformat()}
 
 
 def public_achievement(item: Achievement):
@@ -247,11 +300,30 @@ def tournament_json(db: Session, item: Tournament):
 
 
 def create_app(database_url: str | None = None, upload_dir: str | Path | None = None) -> FastAPI:
-    db_url = database_url or os.environ.get('PLAYSPHERE_DATABASE_URL', f'sqlite:///{ROOT / "playsphere.db"}')
+    db_url = database_url or os.environ.get('PLAYSPHERE_DATABASE_URL') or os.environ.get('DATABASE_URL') or f'sqlite:///{ROOT / "playsphere.db"}'
+    secret = os.environ.get('PLAYSPHERE_SECRET_KEY') or ''
+    on_vercel = bool(os.environ.get('VERCEL'))
+    # A filesystem DB vanishes between serverless executions. Fail visibly, never lose user data silently.
+    if on_vercel and not (db_url.startswith('postgres://') or db_url.startswith('postgresql://') or db_url.startswith('postgresql+psycopg://')):
+        raise RuntimeError('Vercel deployments require a persistent PostgreSQL PLAYSPHERE_DATABASE_URL (or DATABASE_URL).')
+    if on_vercel and len(secret) < 32:
+        raise RuntimeError('Set a persistent PLAYSPHERE_SECRET_KEY (32+ characters) in Vercel Environment Variables.')
+    if not secret:
+        secret = secrets.token_urlsafe(48)  # local developer convenience only
+    if db_url.startswith('postgres://'):
+        db_url = 'postgresql+psycopg://' + db_url[len('postgres://'):]
+    elif db_url.startswith('postgresql://'):
+        db_url = 'postgresql+psycopg://' + db_url[len('postgresql://'):]
     storage = Path(upload_dir or os.environ.get('PLAYSPHERE_UPLOAD_DIR', ROOT / 'uploads')).resolve()
-    storage.mkdir(parents=True, exist_ok=True)
-    secret = os.environ.get('PLAYSPHERE_SECRET_KEY') or secrets.token_urlsafe(48)
-    engine = create_engine(db_url, connect_args={'check_same_thread': False, 'timeout': 30} if db_url.startswith('sqlite') else {}, pool_pre_ping=True)
+    if not on_vercel:
+        storage.mkdir(parents=True, exist_ok=True)
+    engine_options = {'pool_pre_ping': True}
+    if db_url.startswith('sqlite'):
+        engine_options['connect_args'] = {'check_same_thread': False, 'timeout': 30}
+    else:
+        # Serverless instances each have a pool; use a small per-instance pool with a DB pooler.
+        engine_options.update(pool_size=2, max_overflow=1, pool_timeout=15, pool_recycle=180)
+    engine = create_engine(db_url, **engine_options)
     if db_url.startswith('sqlite'):
         @event.listens_for(engine, 'connect')
         def sqlite_pragmas(connection, record):
@@ -259,11 +331,13 @@ def create_app(database_url: str | None = None, upload_dir: str | Path | None = 
             cursor.execute('PRAGMA foreign_keys=ON')
             cursor.execute('PRAGMA busy_timeout=30000')
             cursor.close()
+    # Bootstrap for a new database. Schema changes on an existing production DB require migrations.
     Base.metadata.create_all(engine)
     SessionLocal = sessionmaker(engine, expire_on_commit=False)
     app = FastAPI(title='PlaySphere API', version='2.0.0', docs_url='/api/docs', redoc_url=None)
     app.state.sessionmaker = SessionLocal
     app.state.upload_dir = storage
+    app.state.db_url = db_url
     bearer = HTTPBearer(auto_error=False)
 
     def db_session():
@@ -315,6 +389,17 @@ def create_app(database_url: str | None = None, upload_dir: str | Path | None = 
         items = db.scalars(select(Achievement).where(Achievement.player_id == user.id).order_by(Achievement.year.desc())).all()
         return {**public_user(user), 'videos': [public_video(v) for v in videos],
                 'achievements': [public_achievement(a) for a in items]}
+
+    @app.get('/api/config')
+    def site_config():
+        cloud_ready = all(os.environ.get(f'CLOUDINARY_{field.upper()}') for field in ('cloud_name','api_key','api_secret'))
+        return {'upload_mode': 'cloud' if cloud_ready else ('link-only' if on_vercel else 'local'),
+                'max_video_bytes': MAX_CLOUD_VIDEO_BYTES if cloud_ready else MAX_VIDEO_BYTES}
+
+    @app.get('/api/ready')
+    def readiness(db: DB):
+        db.execute(select(1))
+        return {'status': 'ready', 'database': 'connected'}
 
     @app.get('/api/health')
     def health():
@@ -400,11 +485,65 @@ def create_app(database_url: str | None = None, upload_dir: str | Path | None = 
         db.add(item); db.commit(); db.refresh(item)
         return public_video(item)
 
+    @app.post('/api/videos/sign-upload')
+    def sign_cloud_upload(data: CloudUploadRequest, user: Player):
+        config = cloud_config()
+        public_id = f'playsphere/u{user.id}/{uuid.uuid4().hex}'
+        timestamp = int(time.time())
+        delivery_type = 'authenticated' if data.visibility == 'private' else 'upload'
+        params = {'public_id': public_id, 'timestamp': timestamp, 'type': delivery_type}
+        ticket = jwt.encode({'sub': str(user.id), 'pid': public_id, 'type': delivery_type,
+                             'exp': datetime.now(timezone.utc) + timedelta(minutes=20)},
+                            secret, algorithm='HS256')
+        return {'cloud_name': config['cloud_name'], 'api_key': config['api_key'], **params,
+                'signature': cloud_signature(params, config['api_secret']), 'ticket': ticket}
+
+    @app.post('/api/videos/complete-upload', status_code=201)
+    def complete_cloud_upload(data: CompleteUploadRequest, user: Player, db: DB):
+        config = cloud_config()
+        try:
+            claims = jwt.decode(data.ticket, secret, algorithms=['HS256'])
+        except jwt.PyJWTError:
+            raise HTTPException(422, 'Cloud upload ticket expired or invalid. Retry the upload.')
+        if claims.get('sub') != str(user.id):
+            raise HTTPException(403, 'This upload belongs to another player')
+        asset = data.asset
+        if (asset.public_id != claims.get('pid') or
+                asset.type != claims.get('type') or
+                not asset.public_id.startswith(f'playsphere/u{user.id}/')):
+            raise HTTPException(422, 'Video does not match the authorized upload')
+        expected = cloud_signature({'public_id': asset.public_id, 'version': asset.version}, config['api_secret'])
+        if not secrets.compare_digest(expected, asset.signature):
+            raise HTTPException(422, 'Cloud video response signature is invalid')
+        storage_name = f'cloudinary:{asset.public_id}'
+        if db.scalar(select(Video.id).where(Video.storage_name == storage_name)) is not None:
+            raise HTTPException(409, 'This uploaded video is already in the portfolio')
+        visibility = 'private' if asset.type == 'authenticated' else 'public'
+        url = None
+        if visibility == 'public':
+            # Never trust the browser's secure_url: construct it from signed asset fields.
+            safe_public_id = quote(asset.public_id, safe='/')
+            url = (f'https://res.cloudinary.com/{config["cloud_name"]}/video/upload/'
+                   f'v{asset.version}/{safe_public_id}.{asset.format}')
+        video = Video(player_id=user.id, title=data.title.strip(), kind=data.kind,
+                      visibility=visibility, storage_name=storage_name,
+                      media_type=f'video/{asset.format}', url=url)
+        db.add(video)
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise HTTPException(409, 'This uploaded video was already saved')
+        db.refresh(video)
+        return public_video(video)
+
     @app.post('/api/videos/upload', status_code=201)
     async def upload_video(user: Player, db: DB, file: UploadFile = File(...),
                            title: str = Form(..., min_length=2, max_length=160),
                            kind: Literal['highlight', 'match', 'training'] = Form(...),
                            visibility: Literal['public', 'private'] = Form('public')):
+        if os.environ.get('VERCEL'):
+            raise HTTPException(503, 'Direct uploads on Vercel use /api/videos/sign-upload and Cloudinary.')
         types = {'video/mp4': '.mp4', 'video/webm': '.webm', 'video/quicktime': '.mov'}
         if file.content_type not in types:
             raise HTTPException(415, 'Only MP4, WebM and MOV videos are supported')
@@ -437,6 +576,26 @@ def create_app(database_url: str | None = None, upload_dir: str | Path | None = 
     def my_videos(user: Player, db: DB):
         return [public_video(v) for v in db.scalars(select(Video).where(Video.player_id == user.id).order_by(Video.created_at.desc()))]
 
+    @app.get('/api/videos/{video_id}/access')
+    def cloud_video_access(video_id: int, user: Current, db: DB):
+        video = db.get(Video, video_id)
+        if not video or not video.storage_name or not video.storage_name.startswith('cloudinary:'):
+            raise HTTPException(404, 'Cloud video not found')
+        if video.visibility == 'private' and video.player_id != user.id:
+            raise HTTPException(403, 'Private video')
+        if video.visibility == 'public':
+            return {'url': video.url}
+        config = cloud_config()
+        configure_cloudinary(config)
+        import cloudinary.utils
+        public_id = video.storage_name.split(':', 1)[1]
+        media_format = video.media_type.split('/')[-1]
+        # Owner-only API returns a short-lived media URL, not a permanent public link.
+        signed = cloudinary.utils.private_download_url(
+            public_id, media_format, resource_type='video', type='authenticated',
+            expires_at=int(time.time()) + 300)
+        return {'url': signed}
+
     @app.get('/api/videos/{video_id}/file')
     def video_file(video_id: int, db: DB, authorization: str | None = Header(default=None)):
         video = db.get(Video, video_id)
@@ -451,6 +610,8 @@ def create_app(database_url: str | None = None, upload_dir: str | Path | None = 
                     raise HTTPException(403, 'Private video')
             except (jwt.PyJWTError, KeyError, ValueError, IndexError):
                 raise HTTPException(403, 'Private video')
+        if video.storage_name.startswith('cloudinary:'):
+            raise HTTPException(409, 'Cloud videos use /api/videos/{id}/access for signed access')
         # Storage name is server-generated, never a user-supplied path.
         path = storage / video.storage_name
         if not path.is_file():
@@ -463,8 +624,17 @@ def create_app(database_url: str | None = None, upload_dir: str | Path | None = 
         if not video or video.player_id != user.id:
             raise HTTPException(404, 'Video not found')
         stored = video.storage_name
+        if stored and stored.startswith('cloudinary:'):
+            config = cloud_config()
+            configure_cloudinary(config)
+            import cloudinary.uploader
+            result = cloudinary.uploader.destroy(stored.split(':', 1)[1],
+                resource_type='video', type='authenticated' if video.visibility == 'private' else 'upload',
+                invalidate=True)
+            if result.get('result') not in ('ok', 'not found'):
+                raise HTTPException(502, 'Video could not be removed from cloud storage. Please retry.')
         db.delete(video); db.commit()
-        if stored:
+        if stored and not stored.startswith('cloudinary:'):
             (storage / stored).unlink(missing_ok=True)
 
     @app.get('/api/tournaments')
@@ -499,7 +669,10 @@ def create_app(database_url: str | None = None, upload_dir: str | Path | None = 
 
     @app.post('/api/tournaments/{tournament_id}/register', status_code=201)
     def register_tournament(tournament_id: int, user: Player, db: DB):
-        item = get_event(db, tournament_id)
+        # Lock event row on PostgreSQL to avoid oversubscribing the final spot.
+        item = db.scalar(select(Tournament).where(Tournament.id == tournament_id).with_for_update())
+        if item is None:
+            raise HTTPException(404, 'Tournament not found')
         if db.scalar(select(Registration).where(Registration.tournament_id == item.id, Registration.player_id == user.id)):
             raise HTTPException(409, 'Already registered')
         if not tournament_json(db, item)['registration_open']:
