@@ -107,6 +107,7 @@ function updateWorkspace() {
     <div class="dash-card"><div class="dash-stat">${state.registrations.length}</div><div class="dash-stat-label">TOURNAMENT REGISTRATIONS</div><p>Track all the competitions you've signed up for.</p><a class="btn btn-outline" href="#tournaments">Find more <span>↗</span></a></div>
     <div class="dash-card"><div class="dash-stat">${Object.keys(state.user.stats || {}).length}</div><div class="dash-stat-label">PERFORMANCE STATS</div><p>Keep your personal stats and position up to date.</p><button class="btn btn-outline" data-action="edit-profile">Edit profile <span>↗</span></button></div>
     <div class="dash-card wide"><h3>Your player toolkit</h3><p>Add highlights, achievement evidence and a strong player bio so recruiters can evaluate the complete picture.</p><div class="dash-actions"><button class="btn btn-dark" data-action="add-video">+ Add footage</button><button class="btn btn-outline" data-action="add-achievement">+ Add achievement</button><button class="btn btn-outline" data-action="view-player" data-id="${state.user.id}">View my page ↗</button></div></div>
+    <div class="dash-card wide"><h3>My match footage</h3><p>Manage your uploaded films and video evidence. Private cloud files only open after an authenticated, time-limited request.</p><ul class="dash-list">${state.myVideos.length ? state.myVideos.map(v=>`<li><span><strong>${esc(v.title)}</strong><br><small>${esc(v.kind)} · ${esc(v.visibility)}</small></span><span class="dash-actions"><button data-action="watch-video" data-id="${v.id}">Watch ↗</button><button data-action="delete-video" data-id="${v.id}" aria-label="Delete ${esc(v.title)}">Delete</button></span></li>`).join('') : '<li>No footage added yet. Upload a highlight to get started.</li>'}</ul></div>
     <div class="dash-card"><h3>My tournaments</h3><ul class="dash-list">${state.registrations.length ? state.registrations.slice(0,4).map(t=>`<li><span>${esc(t.title)}<br><small>${dateLabel(t.start_date)}</small></span><button data-action="withdraw" data-id="${t.id}">Withdraw</button></li>`).join('') : '<li>No registrations yet. Explore tournaments to get started.</li>'}</ul></div>` : `
     <div class="dash-card dash-highlight"><div class="dash-stat">${state.shortlist.length}</div><div class="dash-stat-label">SHORTLISTED PLAYERS</div><p>Review talent consistently. Your shortlist is private to you.</p><a class="btn btn-lime" href="#discover">Browse players <span>↗</span></a></div>
     <div class="dash-card"><div class="dash-stat">${state.evaluations.length}</div><div class="dash-stat-label">COMPLETED EVALUATIONS</div><p>Track your four-dimension scouting reports.</p><a class="btn btn-outline" href="#discover">Evaluate talent <span>↗</span></a></div>
@@ -125,10 +126,10 @@ function openModal(type, payload={}) {
   state.modal = type;
   const root = $('#modal-content');
   $('#modal-window').classList.toggle('modal-wide',type==='view-player');
-  if (type==='register') root.innerHTML = `${modalHeading('JOIN THE MOVEMENT','Your journey starts here.','Sign up as a player, scout, coach, or club. Every great opportunity starts with a profile.')}<form class="form-stack" data-form="register">${field('name','Full name / Organization name','text','','required minlength="2" maxlength="120" autocomplete="name"')}${field('email','Email address','email','','required autocomplete="email"')}${field('password','Password (10+ characters)','password','','required minlength="10" autocomplete="new-password"')}${field('role','I am joining as','select',`<option value="player">Player</option><option value="coach">Coach</option><option value="scout">Scout</option><option value="club">Club / Organizer</option>`)}${field('sport','Primary sport','select',sportOptions())}<p class="form-hint">Scout, coach and club roles are self-declared in this demo. Verification is required before any production trust badges or access to sensitive data.</p><button type="submit" class="btn btn-dark btn-large">Create my account ↗</button><div class="form-switch">Already signed up? <button type="button" data-action="login">Log in</button></div></form>`;
+  if (type==='register') root.innerHTML = `${modalHeading('JOIN THE MOVEMENT','Your journey starts here.','Sign up as a player, scout, coach, or club. Every great opportunity starts with a profile.')}<form class="form-stack" data-form="register">${field('name','Full name / Organization name','text','','required minlength="2" maxlength="120" autocomplete="name"')}${field('email','Email address','email','','required autocomplete="email"')}${field('password','Password (10+ characters)','password','','required minlength="10" autocomplete="new-password"')}${field('role','I am joining as','select',`<option value="player">Player</option><option value="coach">Coach</option><option value="scout">Scout</option><option value="club">Club / Organizer</option>`)}${field('sport','Primary sport','select',sportOptions())}<p class="form-hint">Coach, scout and club affiliations are self-declared. Always verify identity independently before recruitment decisions.</p><button type="submit" class="btn btn-dark btn-large">Create my account ↗</button><div class="form-switch">Already signed up? <button type="button" data-action="login">Log in</button></div></form>`;
   else if (type==='login') root.innerHTML = `${modalHeading('WELCOME BACK','Good to have you back.','Pick up where you left off. Your next opportunity is one login away.')}<form class="form-stack" data-form="login">${field('email','Email address','email','','required autocomplete="email"')}${field('password','Password','password','','required autocomplete="current-password"')}<button class="btn btn-dark btn-large" type="submit">Log in to my space ↗</button><div class="form-switch">New to PlaySphere? <button type="button" data-action="register">Create an account</button></div></form>`;
   else if (type==='edit-profile') { const u=state.user || {}; root.innerHTML = `${modalHeading('PLAYER PORTFOLIO','Make your game known.','Tell scouts what you do best. Everything here is public except your email.') }<form data-form="profile" class="form-stack"><div class="form-grid">${field('sport','Sport','select',sportOptions(u.sport))}${field('age','Age','number',u.age||'','min="13" max="100"')}${field('city','City','text',u.city||'','maxlength="100"')}${field('position','Position / Playing role','text',u.position||'','maxlength="100"')}</div>${field('bio','About your game','textarea',u.bio||'','maxlength="1800"')}${field('stats','Stats (e.g. Goals: 12, Assists: 5)','text',Object.entries(u.stats||{}).map(([k,v])=>`${k}: ${v}`).join(', '),'maxlength="1000"')}<button class="btn btn-dark btn-large" type="submit">Save my profile ↗</button></form>`; }
-  else if (type==='add-video') root.innerHTML = `${modalHeading('PUT IT ON FILM','Let the footage speak.','Upload a short match or training clip, or share a secure HTTPS link.')}<form data-form="video" class="form-stack">${field('title','Video title','text','','required maxlength="160" minlength="2"')}${field('kind','Type of footage','select','<option value="highlight">Highlights</option><option value="match">Full match / match clip</option><option value="training">Training / skill drill</option>')}${field('visibility','Visibility','select','<option value="public">Public — visible to scouts</option><option value="private">Private — only me</option>')}<div class="video-switch"><label><input type="radio" name="source" value="link" checked> Video link</label><label><input type="radio" name="source" value="upload"> Upload video</label></div><div class="video-group" id="video-link-group">${field('url','HTTPS video URL','url','','placeholder="https://www.youtube.com/watch?v=…"')}</div><div class="video-group" id="video-upload-group" hidden>${field('file','Select MP4, WebM or MOV (max 25 MB)','file','','accept="video/mp4,video/webm,video/quicktime"')}<p class="form-hint">For larger videos, upload to a trusted video host and add its URL instead.</p></div><button class="btn btn-dark btn-large" type="submit">Add to portfolio ↗</button></form>`;
+  else if (type==='add-video') root.innerHTML = `${modalHeading('PUT IT ON FILM','Let the footage speak.','Upload a short match or training clip, or share a secure HTTPS link.')}<form data-form="video" class="form-stack">${field('title','Video title','text','','required maxlength="160" minlength="2"')}${field('kind','Type of footage','select','<option value="highlight">Highlights</option><option value="match">Full match / match clip</option><option value="training">Training / skill drill</option>')}${field('visibility','Visibility','select','<option value="public">Public — visible to scouts</option><option value="private">Private — hidden from public profiles</option>')}<div class="video-switch"><label><input type="radio" name="source" value="link" checked> Video link</label><label><input type="radio" name="source" value="upload"> Upload video</label></div><div class="video-group" id="video-link-group">${field('url','HTTPS video URL','url','','placeholder="https://www.youtube.com/watch?v=…"')}</div><div class="video-group" id="video-upload-group" hidden>${field('file','Select MP4, WebM or MOV (up to 100 MB with cloud storage)','file','','accept="video/mp4,video/webm,video/quicktime"')}<p class="form-hint">Cloud uploads support up to 100 MB when configured. Local uploads allow 25 MB. External private video links depend on your video host’s permissions.</p></div><button class="btn btn-dark btn-large" type="submit">Add to portfolio ↗</button></form>`;
   else if (type==='add-achievement') root.innerHTML = `${modalHeading('THE MILESTONES','Show what you earned.','Add competitions, medals, certificates and other accomplishments. All claims are labelled unverified until independently checked.')}<form data-form="achievement" class="form-stack">${field('title','Achievement title','text','','required minlength="2" maxlength="160"')}${field('issuer','Issuing event / organization','text','','required minlength="2" maxlength="160"')}<div class="form-grid">${field('year','Year','number',new Date().getFullYear(),'required min="1950" max="2100"')}${field('evidence_url','Evidence link (optional)','url','','placeholder="https://…"')}</div><button class="btn btn-dark btn-large" type="submit">Add achievement ↗</button></form>`;
   else if (type==='create-tournament') {const next = new Date(Date.now()+14*86400000); const nextTwo = new Date(Date.now()+16*86400000); const prev = new Date(Date.now()+12*86400000); const iso=d=>d.toISOString().slice(0,10); root.innerHTML = `${modalHeading('MAKE IT HAPPEN','Host the next big game.','Publish a tournament where players can discover and register for your event.')}<form data-form="tournament" class="form-stack">${field('title','Tournament name','text','','required minlength="3" maxlength="180"')}<div class="form-grid">${field('sport','Sport','select',sportOptions())}${field('level','Level','select','<option>Open</option><option>District</option><option>State</option><option>Regional</option><option>National</option>')}${field('location','Location / Venue','text','','required minlength="2" maxlength="160"')}${field('capacity','Max players','number','100','required min="1" max="5000"')}${field('start_date','Start date','date',iso(next),'required')}${field('end_date','End date','date',iso(nextTwo),'required')}${field('registration_deadline','Registration closes','date',iso(prev),'required')}</div>${field('description','Event description','textarea','','maxlength="3000"')}<button class="btn btn-dark btn-large" type="submit">Publish tournament ↗</button></form>`; }
   else if (type==='evaluate') { const p=payload.player; root.innerHTML = `${modalHeading('SCOUT EVALUATION',`Evaluate ${p.name}`,'Use the same four 1–5 dimensions for every player. Scores and notes are visible only to you; no automatic selection decisions.') }<form data-form="evaluate" class="form-stack" data-id="${p.id}">${['technique','teamwork','consistency','potential'].map(k=>field(k,k.charAt(0).toUpperCase()+k.slice(1)+' · 1–5','select',[1,2,3,4,5].map(n=>`<option value="${n}" ${n===3?'selected':''}>${n} / 5</option>`).join(''))).join('')}${field('notes','Evidence and scouting notes','textarea','','maxlength="2000"')}<button type="submit" class="btn btn-dark btn-large">Save assessment ↗</button></form>`; }
@@ -168,12 +169,38 @@ async function runAction(action,id) {
     if (action==='evaluate') {if(!requireSignIn('evaluate players'))return;if(!roleIs('coach','club','scout'))throw new Error('Scout account required.');const player = state.selectedPlayer?.id===Number(id)?state.selectedPlayer:state.players.find(p=>p.id===Number(id));return openModal('evaluate',{player});}
     if (['shortlist','unshortlist'].includes(action)) {if(!requireSignIn('shortlist players'))return;if(!roleIs('scout','coach','club'))throw new Error('Recruiter account required.');await api(`/api/scouting/${id}/shortlist`,{method:action==='shortlist'?'POST':'DELETE'});await fetchMyData();toast(action==='shortlist'?'Player saved to your shortlist.':'Player removed from shortlist.');return;}
     if (['join-tournament','withdraw'].includes(action)) {if(!requireSignIn('register for tournaments'))return;if(!roleIs('player'))throw new Error('Tournament registration requires a player account.');if(action==='withdraw'&&!confirm('Withdraw your tournament registration?'))return;await api(`/api/tournaments/${id}/register`,{method:action==='withdraw'?'DELETE':'POST'});await fetchAll();toast(action==='withdraw'?'Tournament registration withdrawn.':'You are registered! Good luck.');return;}
+    if (action==='watch-video') {
+      if (!requireSignIn('watch your videos')) return;
+      const video=state.myVideos.find(v=>v.id===Number(id));
+      if(!video) throw new Error('Video no longer exists.');
+      const tab=window.open('about:blank','_blank');
+      try {
+        let url=video.url;
+        if(video.storage==='cloud') {
+          url=(await api(`/api/videos/${id}/access`)).url;
+        } else if(video.storage==='local'&&video.visibility==='private') {
+          const response=await fetch(`/api/videos/${id}/file`,{headers:{Authorization:`Bearer ${state.token}`}});
+          if(!response.ok) throw new Error('Private video could not be loaded.');
+          url=URL.createObjectURL(await response.blob());
+        }
+        if(tab) tab.location.href=url.startsWith('blob:')?url:safeUrl(url);
+        else window.location.href=url.startsWith('blob:')?url:safeUrl(url);
+      } catch(error) { if(tab)tab.close(); throw error; }
+      return;
+    }
+    if (action==='delete-video') {
+      if (!requireSignIn('manage your videos')) return;
+      if (!confirm('Permanently delete this video from your portfolio and cloud storage?')) return;
+      await api(`/api/videos/${id}`, {method:'DELETE'});
+      await fetchMyData(); await fetchAll(); toast('Video deleted.'); return;
+    }
     if (action==='delete-achievement') {if(!confirm('Remove this achievement?'))return;await api(`/api/achievements/${id}`,{method:'DELETE'});if(state.modal==='view-player'&&state.selectedPlayer)await loadPlayerDetail(state.selectedPlayer.id);toast('Achievement removed.');return;}
   } catch (error) {toast(error.message,true);}
 }
 async function submitForm(form) {
   const data = Object.fromEntries(new FormData(form));
   const submit = $('button[type=submit]',form);
+  const originalSubmitText = submit?.textContent;
   if (submit) submit.disabled=true;
   try {
     if (form.dataset.form==='login' || form.dataset.form==='register') {
@@ -191,9 +218,27 @@ async function submitForm(form) {
     }
     if (form.dataset.form==='video') {
       if (data.source==='upload') {
-        const upload=new FormData(form);const file=upload.get('file');if(!file?.size)throw new Error('Choose a video first.');if(file.size>25*1024*1024)throw new Error('Video must be 25 MB or smaller.');
-        const body = new FormData();['title','kind','visibility'].forEach(k=>body.append(k,data[k]));body.append('file',file);
-        await api('/api/videos/upload',{method:'POST',body,form:true});
+        const upload=new FormData(form);const file=upload.get('file');
+        if(!file?.size) throw new Error('Choose a video file first.');
+        const allowed=['video/mp4','video/webm','video/quicktime'];
+        if(!allowed.includes(file.type)) throw new Error('Choose an MP4, WebM or MOV video.');
+        const config=await api('/api/config');
+        if(config.upload_mode==='link-only') throw new Error('Video uploads are not configured yet. Use a secure video URL instead.');
+        if(file.size>config.max_video_bytes) throw new Error(`Video exceeds the ${Math.round(config.max_video_bytes/1024/1024)} MB upload limit.`);
+        if(config.upload_mode==='cloud') {
+          if(submit) submit.textContent='Uploading to secure video storage…';
+          const signed=await api('/api/videos/sign-upload',{method:'POST',body:{visibility:data.visibility}});
+          const cloudBody=new FormData();
+          cloudBody.append('file',file);
+          for(const key of ['api_key','timestamp','public_id','type','signature']) cloudBody.append(key,signed[key]);
+          const cloudResponse=await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(signed.cloud_name)}/video/upload`,{method:'POST',body:cloudBody});
+          const cloudAsset=await cloudResponse.json().catch(()=>({}));
+          if(!cloudResponse.ok) throw new Error(cloudAsset.error?.message || 'Cloud video upload failed. Retry in a moment.');
+          await api('/api/videos/complete-upload',{method:'POST',body:{ticket:signed.ticket,title:data.title,kind:data.kind,asset:{public_id:cloudAsset.public_id,version:cloudAsset.version,signature:cloudAsset.signature,resource_type:cloudAsset.resource_type,type:cloudAsset.type,format:cloudAsset.format,bytes:cloudAsset.bytes}}});
+        } else {
+          const body=new FormData();['title','kind','visibility'].forEach(k=>body.append(k,data[k]));body.append('file',file);
+          await api('/api/videos/upload',{method:'POST',body,form:true});
+        }
       } else {if(!data.url)throw new Error('Paste your video URL.');await api('/api/videos/link',{method:'POST',body:{title:data.title,kind:data.kind,visibility:data.visibility,url:data.url}});}
       closeModal();await fetchMyData();await fetchAll();toast('Footage added to your portfolio.');return;
     }
@@ -205,7 +250,7 @@ async function submitForm(form) {
       const payload = {technique:Number(data.technique),teamwork:Number(data.teamwork),consistency:Number(data.consistency),potential:Number(data.potential),notes:data.notes};
       await api(`/api/scouting/${form.dataset.id}/evaluate`,{method:'POST',body:payload});closeModal();await fetchMyData();toast('Assessment saved privately.');return;
     }
-  } catch(error) {toast(error.message,true);} finally {if(submit)submit.disabled=false;}
+  } catch(error) {toast(error.message,true);} finally {if(submit){submit.disabled=false;submit.textContent=originalSubmitText;}}
 }
 function setupEvents() {
   document.addEventListener('click',(event)=>{
