@@ -37,9 +37,9 @@ These accounts are intentionally for local evaluation; **never run demo seeding 
 
 | Role | Capabilities |
 |---|---|
-| Players | Secure registration/login; update sport, city, position, bio, and statistical profile; add achievements with optional evidence links; upload MP4/WebM/MOV directly to Cloudinary on Vercel (up to 100 MB) or share HTTPS video links; control public/private video visibility; discover and register/withdraw from tournaments |
-| Scouts & coaches | Browse public player portfolios and footage; save private shortlists; record private four-dimension assessments (technique, teamwork, consistency, potential, each 1–5) with notes |
-| Clubs & coaches | Create tournaments with sport, location, date range, capacity and registration deadline; view registrants for their events; use scouting tools |
+| Players | Secure registration/login; update sport, city, position, bio, and statistical profile; manage achievements and evidence links directly from the signed-in dashboard; upload MP4/WebM/MOV directly to Cloudinary on Vercel (up to 100 MB) or share HTTPS video links; control public/private video visibility; discover and register/withdraw from tournaments |
+| Scouts & coaches | Browse public player portfolios and footage; save private shortlists; record and edit private four-dimension assessments (technique, teamwork, consistency, potential, each 1–5) with notes |
+| Clubs & coaches | Create tournaments with sport, location, date range, capacity and registration deadline; view registrants for their events in a private organizer dashboard; use scouting tools |
 | Everyone | Search public talent directory; filter events by sport and **upcoming / live / recent**; view self-reported achievements with clear verification status |
 
 **Fairness approach:** no opaque algorithmic player ranking and no automatic selection/rejection. Every recruiter uses the same *explicit* four-dimension scoring rubric with equal weighting. Scores and subjective notes stay private to the recruiter. This improves consistency, **not a guarantee of fairness**. Achievements are **unverified** without an independent review; recruiter's real-world identity and affiliation are **not verified** in this demonstration.
@@ -53,7 +53,7 @@ python -m compileall -q app.py seed_demo.py
 node --check web/app.js
 ```
 
-CI runs API tests and JavaScript syntax checks on pushes and PRs. Tests use isolated, temporary SQLite databases; they check authentication and authorization, no email leakage in public portfolios, achievements, public/private videos, tournament registration, duplicate prevention, date gating, owner-only attendance, scout evaluation privacy, and shortlisting.
+CI runs API tests and JavaScript syntax checks on pushes and PRs. An optional Chromium browser test (`tests/browser_smoke.py`) exercises the actual FastAPI test client through a browser bridge without requiring network access. Run it after installing `playwright` and a Chromium browser. Tests use isolated, temporary SQLite databases; they check authentication and authorization, no email leakage in public portfolios, achievements, public/private videos, tournament registration, duplicate prevention, date gating, owner-only attendance, scout evaluation privacy, and shortlisting.
 
 ## API overview
 
@@ -61,7 +61,7 @@ CI runs API tests and JavaScript syntax checks on pushes and PRs. Tests use isol
 - `GET /api/players`, `GET /api/players/{id}`, `PATCH /api/players/me`
 - `POST /api/videos/link`, `POST /api/videos/upload`, `GET /api/videos/{id}/file`, `DELETE /api/videos/{id}`
 - `POST /api/achievements`, `DELETE /api/achievements/{id}`
-- `GET /api/tournaments?status=upcoming`, `POST /api/tournaments`, `POST /api/tournaments/{id}/register`, `DELETE /api/tournaments/{id}/register`
+- `GET /api/tournaments?status=upcoming|live|recent&limit=150`, `POST /api/tournaments`, `POST /api/tournaments/{id}/register`, `DELETE /api/tournaments/{id}/register`
 - `GET /api/tournaments/me/registrations`, `GET /api/tournaments/{id}/registrations`
 - `POST /api/scouting/{player_id}/evaluate`, `GET /api/scouting/my-evaluations`, `POST/DELETE /api/scouting/{player_id}/shortlist`, `GET /api/scouting/shortlist`
 - `GET /api/health`, `GET /api/stats`

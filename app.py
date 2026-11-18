@@ -18,7 +18,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field, field_validator
 from sqlalchemy import (Boolean, Date, DateTime, ForeignKey, Integer, String, Text,
-                        UniqueConstraint, create_engine, func, or_, select, event)
+                        UniqueConstraint, case, create_engine, func, or_, select, event)
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 ROOT = Path(__file__).resolve().parent
@@ -638,17 +638,34 @@ def create_app(database_url: str | None = None, upload_dir: str | Path | None = 
             (storage / stored).unlink(missing_ok=True)
 
     @app.get('/api/tournaments')
-    def tournaments(db: DB, sport: str = Query(default='', max_length=60), status_filter: str = Query(default='', alias='status'),
-                    search: str = Query(default='', max_length=100)):
+    def tournaments(db: DB, sport: str = Query(default='', max_length=60),
+                    status_filter: Literal['upcoming', 'live', 'recent'] | None = Query(default=None, alias='status'),
+                    search: str = Query(default='', max_length=100), limit: int = Query(default=150, ge=1, le=300)):
+        today = date.today()
         query = select(Tournament)
         if sport:
             query = query.where(func.lower(Tournament.sport) == sport.lower())
         if search:
             query = query.where(or_(Tournament.title.ilike(f'%{search}%'), Tournament.location.ilike(f'%{search}%')))
-        items = [tournament_json(db, t) for t in db.scalars(query.order_by(Tournament.start_date.asc()).limit(150))]
-        if status_filter:
-            items = [t for t in items if t['status'] == status_filter]
-        return items
+        # Filter in SQL BEFORE limiting, otherwise old tournaments can crowd out discoverable events.
+        if status_filter == 'upcoming':
+            query = query.where(Tournament.start_date > today)
+        elif status_filter == 'live':
+            query = query.where(Tournament.start_date <= today, Tournament.end_date >= today)
+        elif status_filter == 'recent':
+            query = query.where(Tournament.end_date < today)
+
+        if status_filter == 'recent':
+            query = query.order_by(Tournament.start_date.desc(), Tournament.id.desc())
+        else:
+            # For the combined timeline, upcoming/live events take priority; historic events are newest-first.
+            is_past = Tournament.end_date < today
+            query = query.order_by(
+                case((is_past, 1), else_=0).asc(),
+                case((is_past, Tournament.start_date), else_=None).desc(),
+                Tournament.start_date.asc(), Tournament.id.asc()
+            )
+        return [tournament_json(db, t) for t in db.scalars(query.limit(limit))]
 
     @app.get('/api/tournaments/me/registrations')
     def my_registrations(user: Player, db: DB):

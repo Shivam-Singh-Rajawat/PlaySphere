@@ -7,7 +7,7 @@ const safeUrl = (url) => { try { const u = new URL(url, location.origin); return
 const sportIcon = (sport) => ({football:'⚽', basketball:'🏀', cricket:'🏏', badminton:'🏸', tennis:'🎾', athletics:'🏃', volleyball:'🏐'})[String(sport || '').toLowerCase()] || '🏅';
 const dateLabel = (iso) => { const d = new Date(`${iso}T12:00:00`); return Number.isNaN(d.getTime()) ? 'TBA' : d.toLocaleDateString('en-IN', {day:'numeric', month:'short', year:'numeric'}); };
 const dateParts = (iso) => { const d = new Date(`${iso}T12:00:00`); return {day: d.toLocaleDateString('en-IN', {day:'2-digit'}), month:d.toLocaleDateString('en-IN', {month:'short'}).toUpperCase()}; };
-const state = { token: sessionStorage.getItem('ps_token') || '', user: null, players: [], tournaments: [], stats: {}, registrations: [], shortlist: [], evaluations: [], myVideos: [], activeStatus: 'upcoming', loading: true, modal: '', selectedPlayer: null };
+const state = { token: sessionStorage.getItem('ps_token') || '', user: null, players: [], tournaments: [], stats: {}, registrations: [], shortlist: [], evaluations: [], myVideos: [], myAchievements: [], activeStatus: 'upcoming', loading: true, modal: '', selectedPlayer: null };
 let toastTimer;
 
 async function api(path, { method='GET', body, form=false, ...rest }={}) {
@@ -36,12 +36,12 @@ function loginUser(data) {
   renderNav(); updateWorkspace();
 }
 function logout() {
-  state.token = ''; state.user = null; state.registrations = []; state.shortlist = []; state.evaluations = []; state.myVideos = [];
+  state.token = ''; state.user = null; state.registrations = []; state.shortlist = []; state.evaluations = []; state.myVideos = []; state.myAchievements = [];
   sessionStorage.removeItem('ps_token'); renderNav(); updateWorkspace(); renderPlayers(); renderTournaments();
   toast('You have been logged out.');
 }
 async function fetchAll() {
-  const results = await Promise.allSettled([api('/api/players'), api('/api/tournaments'), api('/api/stats')]);
+  const results = await Promise.allSettled([api('/api/players'), Promise.all(['upcoming','live','recent'].map(status => api(`/api/tournaments?status=${status}`))).then(groups => groups.flat()), api('/api/stats')]);
   const keys = ['players','tournaments','stats'];
   results.forEach((result,i) => { if(result.status === 'fulfilled') state[keys[i]] = result.value; else toast(`Could not load ${keys[i]}. Please refresh.`, true); });
   state.loading = false; renderPlayers(); renderTournaments();
@@ -50,10 +50,10 @@ async function fetchAll() {
 async function fetchMyData() {
   if (!state.user) return;
   const requests = state.user.role === 'player'
-    ? [['registrations','/api/tournaments/me/registrations'],['myVideos','/api/players/me/videos']]
+    ? [['registrations','/api/tournaments/me/registrations'],['myVideos','/api/players/me/videos'],['myAchievements',`/api/players/${state.user.id}`]]
     : [['shortlist','/api/scouting/shortlist'],['evaluations','/api/scouting/my-evaluations']];
   const results = await Promise.allSettled(requests.map(([,path])=>api(path)));
-  results.forEach((r,i) => { if(r.status === 'fulfilled') state[requests[i][0]] = r.value; });
+  results.forEach((r,i) => { if(r.status === 'fulfilled') state[requests[i][0]] = requests[i][0] === 'myAchievements' ? r.value.achievements : r.value; });
   renderPlayers(); renderTournaments(); updateWorkspace();
 }
 function renderNav() {
@@ -108,12 +108,14 @@ function updateWorkspace() {
     <div class="dash-card"><div class="dash-stat">${Object.keys(state.user.stats || {}).length}</div><div class="dash-stat-label">PERFORMANCE STATS</div><p>Keep your personal stats and position up to date.</p><button class="btn btn-outline" data-action="edit-profile">Edit profile <span>↗</span></button></div>
     <div class="dash-card wide"><h3>Your player toolkit</h3><p>Add highlights, achievement evidence and a strong player bio so recruiters can evaluate the complete picture.</p><div class="dash-actions"><button class="btn btn-dark" data-action="add-video">+ Add footage</button><button class="btn btn-outline" data-action="add-achievement">+ Add achievement</button><button class="btn btn-outline" data-action="view-player" data-id="${state.user.id}">View my page ↗</button></div></div>
     <div class="dash-card wide"><h3>My match footage</h3><p>Manage your uploaded films and video evidence. Private cloud files only open after an authenticated, time-limited request.</p><ul class="dash-list">${state.myVideos.length ? state.myVideos.map(v=>`<li><span><strong>${esc(v.title)}</strong><br><small>${esc(v.kind)} · ${esc(v.visibility)}</small></span><span class="dash-actions"><button data-action="watch-video" data-id="${v.id}">Watch ↗</button><button data-action="delete-video" data-id="${v.id}" aria-label="Delete ${esc(v.title)}">Delete</button></span></li>`).join('') : '<li>No footage added yet. Upload a highlight to get started.</li>'}</ul></div>
+    <div class="dash-card wide"><h3>My achievements</h3><p>Show the awards and certificates that back up your game. Achievements remain labelled unverified.</p><ul class="dash-list">${state.myAchievements.length ? state.myAchievements.map(a=>`<li><span><strong>${esc(a.title)}</strong><br><small>${esc(a.issuer)} · ${a.year} · ${a.verified?'Verified':'Unverified'} ${a.evidence_url?`· <a href="${esc(safeUrl(a.evidence_url))}" target="_blank" rel="noopener noreferrer">View evidence ↗</a>`:''}</small></span><button data-action="delete-achievement" data-id="${a.id}" aria-label="Remove ${esc(a.title)}">Remove</button></li>`).join('') : '<li>No achievements added yet. Record your best moments.</li>'}</ul><button class="btn btn-outline" data-action="add-achievement">+ Add achievement</button></div>
     <div class="dash-card"><h3>My tournaments</h3><ul class="dash-list">${state.registrations.length ? state.registrations.slice(0,4).map(t=>`<li><span>${esc(t.title)}<br><small>${dateLabel(t.start_date)}</small></span><button data-action="withdraw" data-id="${t.id}">Withdraw</button></li>`).join('') : '<li>No registrations yet. Explore tournaments to get started.</li>'}</ul></div>` : `
     <div class="dash-card dash-highlight"><div class="dash-stat">${state.shortlist.length}</div><div class="dash-stat-label">SHORTLISTED PLAYERS</div><p>Review talent consistently. Your shortlist is private to you.</p><a class="btn btn-lime" href="#discover">Browse players <span>↗</span></a></div>
     <div class="dash-card"><div class="dash-stat">${state.evaluations.length}</div><div class="dash-stat-label">COMPLETED EVALUATIONS</div><p>Track your four-dimension scouting reports.</p><a class="btn btn-outline" href="#discover">Evaluate talent <span>↗</span></a></div>
     <div class="dash-card"><div class="dash-stat">${state.tournaments.filter(x=>x.owner_id===state.user.id).length}</div><div class="dash-stat-label">MY TOURNAMENTS</div><p>Clubs and coaches can publish real events for players.</p>${roleIs('club','coach') ? '<button class="btn btn-outline" data-action="create-tournament">Post event <span>↗</span></button>' : '<p>Event publishing is for coaches and clubs.</p>'}</div>
     <div class="dash-card wide"><h3>My scouting shortlist</h3><ul class="dash-list">${state.shortlist.length ? state.shortlist.map(p=>`<li><span>${esc(p.name)} <small>· ${esc(p.sport)}</small></span><button data-action="view-player" data-id="${p.id}">Review ↗</button></li>`).join('') : '<li>No shortlisted athletes yet. Browse the player directory.</li>'}</ul></div>
-    <div class="dash-card"><h3>My assessments</h3><ul class="dash-list">${state.evaluations.length ? state.evaluations.slice(0,5).map(e=>`<li><span>${esc(e.player_name)}</span><span>${e.score} / 5</span></li>`).join('') : '<li>Your written assessments will appear here.</li>'}</ul></div>`;
+    <div class="dash-card"><h3>My assessments</h3><ul class="dash-list">${state.evaluations.length ? state.evaluations.slice(0,8).map(e=>`<li><span>${esc(e.player_name)}<br><small>${e.score} / 5 · Private assessment</small></span><button data-action="evaluate" data-id="${e.player_id}">Review / edit ↗</button></li>`).join('') : '<li>Your written assessments will appear here.</li>'}</ul></div>
+    ${roleIs('coach','club') ? `<div class="dash-card wide"><h3>My organized tournaments</h3><p>See which athletes have registered for events you manage.</p><ul class="dash-list">${state.tournaments.filter(t=>t.owner_id===state.user.id).length ? state.tournaments.filter(t=>t.owner_id===state.user.id).map(t=>`<li><span><strong>${esc(t.title)}</strong><br><small>${dateLabel(t.start_date)} · ${t.participants_count}/${t.capacity} registered</small></span><button data-action="view-registrations" data-id="${t.id}">View entrants ↗</button></li>`).join('') : '<li>You have not posted a tournament yet.</li>'}</ul></div>` : ''}`;
   $('#dashboard-body').innerHTML = `<div class="dashboard-grid">${cards}</div>`;
 }
 function field(name,label,type='text',value='',extra='') {
@@ -132,16 +134,26 @@ function openModal(type, payload={}) {
   else if (type==='add-video') root.innerHTML = `${modalHeading('PUT IT ON FILM','Let the footage speak.','Upload a short match or training clip, or share a secure HTTPS link.')}<form data-form="video" class="form-stack">${field('title','Video title','text','','required maxlength="160" minlength="2"')}${field('kind','Type of footage','select','<option value="highlight">Highlights</option><option value="match">Full match / match clip</option><option value="training">Training / skill drill</option>')}${field('visibility','Visibility','select','<option value="public">Public — visible to scouts</option><option value="private">Private — hidden from public profiles</option>')}<div class="video-switch"><label><input type="radio" name="source" value="link" checked> Video link</label><label><input type="radio" name="source" value="upload"> Upload video</label></div><div class="video-group" id="video-link-group">${field('url','HTTPS video URL','url','','placeholder="https://www.youtube.com/watch?v=…"')}</div><div class="video-group" id="video-upload-group" hidden>${field('file','Select MP4, WebM or MOV (up to 100 MB with cloud storage)','file','','accept="video/mp4,video/webm,video/quicktime"')}<p class="form-hint">Cloud uploads support up to 100 MB when configured. Local uploads allow 25 MB. External private video links depend on your video host’s permissions.</p></div><button class="btn btn-dark btn-large" type="submit">Add to portfolio ↗</button></form>`;
   else if (type==='add-achievement') root.innerHTML = `${modalHeading('THE MILESTONES','Show what you earned.','Add competitions, medals, certificates and other accomplishments. All claims are labelled unverified until independently checked.')}<form data-form="achievement" class="form-stack">${field('title','Achievement title','text','','required minlength="2" maxlength="160"')}${field('issuer','Issuing event / organization','text','','required minlength="2" maxlength="160"')}<div class="form-grid">${field('year','Year','number',new Date().getFullYear(),'required min="1950" max="2100"')}${field('evidence_url','Evidence link (optional)','url','','placeholder="https://…"')}</div><button class="btn btn-dark btn-large" type="submit">Add achievement ↗</button></form>`;
   else if (type==='create-tournament') {const next = new Date(Date.now()+14*86400000); const nextTwo = new Date(Date.now()+16*86400000); const prev = new Date(Date.now()+12*86400000); const iso=d=>d.toISOString().slice(0,10); root.innerHTML = `${modalHeading('MAKE IT HAPPEN','Host the next big game.','Publish a tournament where players can discover and register for your event.')}<form data-form="tournament" class="form-stack">${field('title','Tournament name','text','','required minlength="3" maxlength="180"')}<div class="form-grid">${field('sport','Sport','select',sportOptions())}${field('level','Level','select','<option>Open</option><option>District</option><option>State</option><option>Regional</option><option>National</option>')}${field('location','Location / Venue','text','','required minlength="2" maxlength="160"')}${field('capacity','Max players','number','100','required min="1" max="5000"')}${field('start_date','Start date','date',iso(next),'required')}${field('end_date','End date','date',iso(nextTwo),'required')}${field('registration_deadline','Registration closes','date',iso(prev),'required')}</div>${field('description','Event description','textarea','','maxlength="3000"')}<button class="btn btn-dark btn-large" type="submit">Publish tournament ↗</button></form>`; }
-  else if (type==='evaluate') { const p=payload.player; root.innerHTML = `${modalHeading('SCOUT EVALUATION',`Evaluate ${p.name}`,'Use the same four 1–5 dimensions for every player. Scores and notes are visible only to you; no automatic selection decisions.') }<form data-form="evaluate" class="form-stack" data-id="${p.id}">${['technique','teamwork','consistency','potential'].map(k=>field(k,k.charAt(0).toUpperCase()+k.slice(1)+' · 1–5','select',[1,2,3,4,5].map(n=>`<option value="${n}" ${n===3?'selected':''}>${n} / 5</option>`).join(''))).join('')}${field('notes','Evidence and scouting notes','textarea','','maxlength="2000"')}<button type="submit" class="btn btn-dark btn-large">Save assessment ↗</button></form>`; }
+  else if (type==='evaluate') { const p=payload.player; const previous=state.evaluations.find(e=>e.player_id===p.id); root.innerHTML = `${modalHeading('SCOUT EVALUATION',`Evaluate ${p.name}`,previous?'Review your existing private scorecard and edit it below.':'Use the same four 1–5 dimensions for every player. Only you see these notes; no automatic selection decisions.') }<form data-form="evaluate" class="form-stack" data-id="${p.id}">${['technique','teamwork','consistency','potential'].map(k=>field(k,k.charAt(0).toUpperCase()+k.slice(1)+' · 1–5','select',[1,2,3,4,5].map(n=>`<option value="${n}" ${n===(previous?.[k] ?? 3)?'selected':''}>${n} / 5</option>`).join(''))).join('')}${field('notes','Evidence and scouting notes','textarea',previous?.notes||'','maxlength="2000"')}<button type="submit" class="btn btn-dark btn-large">${previous?'Update assessment':'Save assessment'} ↗</button></form>`; }
   else if (type==='view-player') {root.innerHTML = `${modalHeading('PLAYER PORTFOLIO','Loading athlete…')}<div class="loading-state">Loading player profile…</div>`;}
+  else if (type==='view-registrations') {root.innerHTML = `${modalHeading('TOURNAMENT ENTRANTS','Loading registrations…')}<div class="loading-state">Fetching the event roster…</div>`;}
   else return;
   $('#modal-shell').hidden=false;
   document.body.style.overflow='hidden';
   $('#modal-window').scrollTop=0;
   const first = $('input:not([type=hidden]),select,textarea',root); (first || $('#modal-window')).focus({preventScroll:true});
   if (type==='view-player') loadPlayerDetail(payload.id);
+  if (type==='view-registrations') loadRegistrations(payload.id);
 }
 function closeModal() { $('#modal-shell').hidden=true;document.body.style.overflow='';state.modal='';state.selectedPlayer=null; }
+async function loadRegistrations(id) {
+  try {
+    const players=await api(`/api/tournaments/${id}/registrations`);
+    if (state.modal !== 'view-registrations') return;
+    const title=state.tournaments.find(t=>t.id===id)?.title || 'Tournament';
+    $('#modal-content').innerHTML = `${modalHeading('ORGANIZER DASHBOARD',title,`${players.length} player${players.length===1?'':'s'} registered. This roster is visible only to the organizer.`)}<div class="detail-section"><h3>Registered athletes</h3>${players.length ? players.map(p=>`<div class="detail-item"><div><strong>${esc(p.name)}</strong><small>${esc(p.sport||'Athlete')} · ${esc(p.position||'Position not set')} · ${esc(p.city||'Location not set')}</small></div><button class="link-button" data-action="view-player" data-id="${p.id}">View profile ↗</button></div>`).join('') : '<p class="detail-bio">No registrations yet.</p>'}</div>`;
+  } catch(error) {$('#modal-content').innerHTML=`${modalHeading('TOURNAMENT ENTRANTS','Could not load roster',error.message)}`;}
+}
 async function loadPlayerDetail(id) {
   try {
     const p = await api(`/api/players/${id}`); if (state.modal!=='view-player') return;
@@ -166,9 +178,10 @@ async function runAction(action,id) {
     if (action==='view-player') return openModal('view-player',{id:Number(id)});
     if (action==='add-video' || action==='add-achievement' || action==='edit-profile') {if(!requireSignIn('manage your portfolio'))return;if(!roleIs('player'))throw new Error('Only player accounts can edit portfolios.');return openModal(action);}
     if (action==='create-tournament') {if(!requireSignIn('post tournaments'))return;if(!roleIs('club','coach'))throw new Error('Only clubs and coaches can post tournaments.');return openModal(action);}
-    if (action==='evaluate') {if(!requireSignIn('evaluate players'))return;if(!roleIs('coach','club','scout'))throw new Error('Scout account required.');const player = state.selectedPlayer?.id===Number(id)?state.selectedPlayer:state.players.find(p=>p.id===Number(id));return openModal('evaluate',{player});}
+    if (action==='evaluate') {if(!requireSignIn('evaluate players'))return;if(!roleIs('coach','club','scout'))throw new Error('Scout account required.');const player = state.selectedPlayer?.id===Number(id)?state.selectedPlayer:state.players.find(p=>p.id===Number(id))||{id:Number(id),name:state.evaluations.find(e=>e.player_id===Number(id))?.player_name||'athlete'};return openModal('evaluate',{player});}
     if (['shortlist','unshortlist'].includes(action)) {if(!requireSignIn('shortlist players'))return;if(!roleIs('scout','coach','club'))throw new Error('Recruiter account required.');await api(`/api/scouting/${id}/shortlist`,{method:action==='shortlist'?'POST':'DELETE'});await fetchMyData();toast(action==='shortlist'?'Player saved to your shortlist.':'Player removed from shortlist.');return;}
     if (['join-tournament','withdraw'].includes(action)) {if(!requireSignIn('register for tournaments'))return;if(!roleIs('player'))throw new Error('Tournament registration requires a player account.');if(action==='withdraw'&&!confirm('Withdraw your tournament registration?'))return;await api(`/api/tournaments/${id}/register`,{method:action==='withdraw'?'DELETE':'POST'});await fetchAll();toast(action==='withdraw'?'Tournament registration withdrawn.':'You are registered! Good luck.');return;}
+    if (action==='view-registrations') {if(!requireSignIn('view event registrations'))return;if(!roleIs('coach','club'))throw new Error('Only coaches and clubs can view event rosters.');return openModal('view-registrations',{id:Number(id)});}
     if (action==='watch-video') {
       if (!requireSignIn('watch your videos')) return;
       const video=state.myVideos.find(v=>v.id===Number(id));
@@ -194,7 +207,7 @@ async function runAction(action,id) {
       await api(`/api/videos/${id}`, {method:'DELETE'});
       await fetchMyData(); await fetchAll(); toast('Video deleted.'); return;
     }
-    if (action==='delete-achievement') {if(!confirm('Remove this achievement?'))return;await api(`/api/achievements/${id}`,{method:'DELETE'});if(state.modal==='view-player'&&state.selectedPlayer)await loadPlayerDetail(state.selectedPlayer.id);toast('Achievement removed.');return;}
+    if (action==='delete-achievement') {if(!confirm('Remove this achievement?'))return;await api(`/api/achievements/${id}`,{method:'DELETE'});if(state.modal==='view-player'&&state.selectedPlayer)await loadPlayerDetail(state.selectedPlayer.id);await fetchMyData();toast('Achievement removed.');return;}
   } catch (error) {toast(error.message,true);}
 }
 async function submitForm(form) {
@@ -214,7 +227,7 @@ async function submitForm(form) {
     }
     if (form.dataset.form==='achievement') {
       await api('/api/achievements',{method:'POST',body:{title:data.title,issuer:data.issuer,year:Number(data.year),evidence_url:data.evidence_url||null}});
-      closeModal();toast('Achievement added. Evidence is not independently verified.');return;
+      closeModal();await fetchMyData();toast('Achievement added. Evidence is not independently verified.');return;
     }
     if (form.dataset.form==='video') {
       if (data.source==='upload') {
