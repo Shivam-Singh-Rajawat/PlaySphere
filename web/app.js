@@ -7,7 +7,7 @@ const safeUrl = (url) => { try { const u = new URL(url, location.origin); return
 const sportIcon = (sport) => ({football:'⚽', basketball:'🏀', cricket:'🏏', badminton:'🏸', tennis:'🎾', athletics:'🏃', volleyball:'🏐'})[String(sport || '').toLowerCase()] || '🏅';
 const dateLabel = (iso) => { const d = new Date(`${iso}T12:00:00`); return Number.isNaN(d.getTime()) ? 'TBA' : d.toLocaleDateString('en-IN', {day:'numeric', month:'short', year:'numeric'}); };
 const dateParts = (iso) => { const d = new Date(`${iso}T12:00:00`); return {day: d.toLocaleDateString('en-IN', {day:'2-digit'}), month:d.toLocaleDateString('en-IN', {month:'short'}).toUpperCase()}; };
-const state = { token: sessionStorage.getItem('ps_token') || '', user: null, players: [], tournaments: [], stats: {}, registrations: [], shortlist: [], evaluations: [], myVideos: [], activeStatus: 'upcoming', loading: true, modal: '', selectedPlayer: null };
+const state = { token: sessionStorage.getItem('ps_token') || '', user: null, players: [], tournaments: [], stats: {}, registrations: [], shortlist: [], evaluations: [], myVideos: [], myAchievements: [], activeStatus: 'upcoming', loading: true, modal: '', selectedPlayer: null };
 let toastTimer;
 
 async function api(path, { method='GET', body, form=false, ...rest }={}) {
@@ -36,12 +36,12 @@ function loginUser(data) {
   renderNav(); updateWorkspace();
 }
 function logout() {
-  state.token = ''; state.user = null; state.registrations = []; state.shortlist = []; state.evaluations = []; state.myVideos = [];
+  state.token = ''; state.user = null; state.registrations = []; state.shortlist = []; state.evaluations = []; state.myVideos = []; state.myAchievements = [];
   sessionStorage.removeItem('ps_token'); renderNav(); updateWorkspace(); renderPlayers(); renderTournaments();
   toast('You have been logged out.');
 }
 async function fetchAll() {
-  const results = await Promise.allSettled([api('/api/players'), api('/api/tournaments'), api('/api/stats')]);
+  const results = await Promise.allSettled([api('/api/players'), Promise.all(['upcoming','live','recent'].map(status => api(`/api/tournaments?status=${status}`))).then(groups => groups.flat()), api('/api/stats')]);
   const keys = ['players','tournaments','stats'];
   results.forEach((result,i) => { if(result.status === 'fulfilled') state[keys[i]] = result.value; else toast(`Could not load ${keys[i]}. Please refresh.`, true); });
   state.loading = false; renderPlayers(); renderTournaments();
@@ -50,10 +50,10 @@ async function fetchAll() {
 async function fetchMyData() {
   if (!state.user) return;
   const requests = state.user.role === 'player'
-    ? [['registrations','/api/tournaments/me/registrations'],['myVideos','/api/players/me/videos']]
+    ? [['registrations','/api/tournaments/me/registrations'],['myVideos','/api/players/me/videos'],['myAchievements',`/api/players/${state.user.id}`]]
     : [['shortlist','/api/scouting/shortlist'],['evaluations','/api/scouting/my-evaluations']];
   const results = await Promise.allSettled(requests.map(([,path])=>api(path)));
-  results.forEach((r,i) => { if(r.status === 'fulfilled') state[requests[i][0]] = r.value; });
+  results.forEach((r,i) => { if(r.status === 'fulfilled') state[requests[i][0]] = requests[i][0] === 'myAchievements' ? r.value.achievements : r.value; });
   renderPlayers(); renderTournaments(); updateWorkspace();
 }
 function renderNav() {
