@@ -12,6 +12,7 @@ from urllib.parse import quote
 from typing import Annotated, Literal
 
 import jwt
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile, Response
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -26,6 +27,15 @@ MAX_VIDEO_BYTES = 25 * 1024 * 1024
 MAX_CLOUD_VIDEO_BYTES = 100 * 1024 * 1024
 ROLES = {'player', 'coach', 'scout', 'club'}
 SCOUT_ROLES = {'coach', 'scout', 'club'}
+
+
+def load_local_env(root: Path) -> None:
+    """Read Neon CLI env files locally; never override explicit process or Vercel config."""
+    if os.environ.get('VERCEL'):
+        return
+    # Neon writes .env.local, so it takes precedence over a generic .env file.
+    load_dotenv(root / '.env.local', override=False)
+    load_dotenv(root / '.env', override=False)
 
 
 class Base(DeclarativeBase):
@@ -300,6 +310,7 @@ def tournament_json(db: Session, item: Tournament):
 
 
 def create_app(database_url: str | None = None, upload_dir: str | Path | None = None) -> FastAPI:
+    load_local_env(ROOT)
     db_url = database_url or os.environ.get('PLAYSPHERE_DATABASE_URL') or os.environ.get('DATABASE_URL') or f'sqlite:///{ROOT / "playsphere.db"}'
     secret = os.environ.get('PLAYSPHERE_SECRET_KEY') or ''
     on_vercel = bool(os.environ.get('VERCEL'))
